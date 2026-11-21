@@ -47,9 +47,10 @@ export function VRPlayerModal({
   const [isWebXRSupported, setIsWebXRSupported] = useState(false);
   const [isInVR, setIsInVR] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
+  const [streamDebugInfo, setStreamDebugInfo] = useState<string>('');
   const [reloadNonce, setReloadNonce] = useState(0);
 
-  const streamUrl = `/drive-stream/${encodeURIComponent(file.id)}?v=${reloadNonce}`;
+  const streamUrl = `/drive-stream/${encodeURIComponent(file.id)}?v=${reloadNonce}&mime=${encodeURIComponent(file.mimeType || 'video/mp4')}&size=${encodeURIComponent(file.size || '')}`;
 
   useEffect(() => {
     if (!isSwReady) return;
@@ -71,11 +72,14 @@ export function VRPlayerModal({
           );
         }
 
-        const probeRes = await fetch(`/drive-stream/${encodeURIComponent(file.id)}`, {
-          method: 'GET',
-          headers: { Range: 'bytes=0-1' },
-          cache: 'no-store',
-        });
+        const probeRes = await fetch(
+          `/drive-stream/${encodeURIComponent(file.id)}?mime=${encodeURIComponent(file.mimeType || 'video/mp4')}&size=${encodeURIComponent(file.size || '')}`,
+          {
+            method: 'GET',
+            headers: { Range: 'bytes=0-1' },
+            cache: 'no-store',
+          }
+        );
 
         if (!probeRes.ok && probeRes.status !== 206) {
           const detail = await probeRes.text().catch(() => '');
@@ -93,6 +97,7 @@ export function VRPlayerModal({
         }
 
         const contentType = probeRes.headers.get('content-type') || '';
+        const contentRange = probeRes.headers.get('content-range') || '';
         if (contentType.includes('text/html')) {
           throw new Error(
             '영상 대신 웹 페이지가 반환되었습니다. 페이지를 새로고침한 뒤 다시 재생해 주세요.'
@@ -100,6 +105,9 @@ export function VRPlayerModal({
         }
 
         if (!cancelled) {
+          setStreamDebugInfo(
+            `파일 형식: ${file.mimeType} | 응답: HTTP ${probeRes.status} (${contentType || 'unknown'}, ${contentRange || 'no-range'})`
+          );
           setIsStreamVerified(true);
         }
       } catch (err) {
@@ -294,8 +302,9 @@ export function VRPlayerModal({
             const mediaErr = e.currentTarget.error;
             const codeMsg = mediaErr ? MEDIA_ERROR_MESSAGES[mediaErr.code] : undefined;
             const detail = mediaErr?.message ? ` (${mediaErr.message})` : '';
+            const debugSuffix = streamDebugInfo ? ` [${streamDebugInfo}]` : '';
             setStreamError(
-              `${codeMsg || '영상 스트리밍을 불러오는 중 오류가 발생했습니다.'}${detail}`
+              `${codeMsg || '영상 스트리밍을 불러오는 중 오류가 발생했습니다.'}${detail}${debugSuffix}`
             );
           }}
         />

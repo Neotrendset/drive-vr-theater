@@ -160,9 +160,48 @@ async function handleDriveStream(request, url) {
       responseHeaders.set('Accept-Ranges', 'bytes');
     }
 
+    let finalStatus = upstreamResponse.status;
+    let finalStatusText = upstreamResponse.statusText;
+
+    // Google Drive CORS 응답에서 Content-Range 헤더가 가려진 경우 Range 요청과 file.size로 복원
+    if (finalStatus === 206 && !responseHeaders.has('Content-Range')) {
+      const totalSize = Number(url.searchParams.get('size') || '0');
+      const contentLen = Number(responseHeaders.get('Content-Length') || '0');
+      const rangeMatch = rangeHeader ? rangeHeader.match(/bytes=(\d+)-(\d*)/i) : null;
+
+      if (rangeMatch && totalSize > 0) {
+        const start = Number(rangeMatch[1]);
+        const end = rangeMatch[2]
+          ? Math.min(Number(rangeMatch[2]), totalSize - 1)
+          : contentLen > 0
+            ? Math.min(start + contentLen - 1, totalSize - 1)
+            : totalSize - 1;
+        responseHeaders.set('Content-Range', `bytes ${start}-${end}/${totalSize}`);
+        if (!responseHeaders.has('Content-Length')) {
+          responseHeaders.set('Content-Length', String(end - start + 1));
+        }
+      } else if (!rangeMatch || rangeMatch[1] === '0') {
+        // bytes=0- 요청인데 totalSize를 알 수 없는 경우 200 OK로 폴백
+        finalStatus = 200;
+        finalStatusText = 'OK';
+      }
+    }
+
+    const fallbackMime = url.searchParams.get('mime');
+    const currentType = responseHeaders.get('Content-Type') || '';
+    if (fallbackMime && (!currentType || currentType.includes('octet-stream'))) {
+      responseHeaders.set('Content-Type', fallbackMime);
+    }
+
+    responseHeaders.set('Access-Control-Allow-Origin', '*');
+    responseHeaders.set(
+      'Access-Control-Expose-Headers',
+      'Content-Range, Content-Length, Accept-Ranges, Content-Type'
+    );
+
     return new Response(upstreamResponse.body, {
-      status: upstreamResponse.status,
-      statusText: upstreamResponse.statusText,
+      status: finalStatus,
+      statusText: finalStatusText,
       headers: responseHeaders,
     });
   } catch (err) {
