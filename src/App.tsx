@@ -37,7 +37,7 @@ export function App() {
   const [selectedFolderId, setSelectedFolderId] = useState('ALL');
   const [selectedFile, setSelectedFile] = useState<DriveFile | null>(null);
 
-  const { isReady: isSwReady, swError } = useServiceWorker(accessToken);
+  const { isReady: isSwReady, swError, syncToken } = useServiceWorker(accessToken);
 
   const handleLogout = useCallback(() => {
     if (accessToken && window.google?.accounts?.oauth2) {
@@ -237,6 +237,8 @@ export function App() {
         <VRPlayerModal
           file={selectedFile}
           isSwReady={isSwReady}
+          accessToken={accessToken}
+          syncToken={syncToken}
           onClose={() => setSelectedFile(null)}
         />
       )}

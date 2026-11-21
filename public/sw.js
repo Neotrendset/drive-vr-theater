@@ -1,8 +1,37 @@
 /* eslint-disable no-restricted-globals */
 const STREAM_PREFIX = '/drive-stream/';
 const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3/files';
+const AUTH_CACHE_NAME = 'drivevr-auth-v1';
+const AUTH_CACHE_KEY = '/__drivevr_token__';
 
 let accessToken = null;
+
+async function saveTokenToCache(token) {
+  try {
+    const cache = await caches.open(AUTH_CACHE_NAME);
+    if (token) {
+      await cache.put(AUTH_CACHE_KEY, new Response(token));
+    } else {
+      await cache.delete(AUTH_CACHE_KEY);
+    }
+  } catch {
+    // Cache API 사용 불가 시 무시
+  }
+}
+
+async function loadTokenFromCache() {
+  try {
+    const cache = await caches.open(AUTH_CACHE_NAME);
+    const res = await cache.match(AUTH_CACHE_KEY);
+    if (res) {
+      const token = await res.text();
+      return token || null;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());
@@ -18,25 +47,39 @@ self.addEventListener('message', (event) => {
 
   if (data.type === 'SET_TOKEN') {
     accessToken = data.token || null;
-    if (event.ports && event.ports[0]) {
-      event.ports[0].postMessage({ ok: true, hasToken: Boolean(accessToken) });
-    }
+    event.waitUntil(
+      saveTokenToCache(accessToken).then(() => {
+        if (event.ports && event.ports[0]) {
+          event.ports[0].postMessage({ ok: true, hasToken: Boolean(accessToken) });
+        }
+      })
+    );
   } else if (data.type === 'CLEAR_TOKEN') {
     accessToken = null;
-    if (event.ports && event.ports[0]) {
-      event.ports[0].postMessage({ ok: true, hasToken: false });
-    }
+    event.waitUntil(
+      saveTokenToCache(null).then(() => {
+        if (event.ports && event.ports[0]) {
+          event.ports[0].postMessage({ ok: true, hasToken: false });
+        }
+      })
+    );
   } else if (data.type === 'PING') {
-    if (event.ports && event.ports[0]) {
-      event.ports[0].postMessage({ ok: true, hasToken: Boolean(accessToken) });
-    }
+    event.waitUntil(
+      (async () => {
+        if (!accessToken) {
+          accessToken = await loadTokenFromCache();
+        }
+        if (event.ports && event.ports[0]) {
+          event.ports[0].postMessage({ ok: true, hasToken: Boolean(accessToken) });
+        }
+      })()
+    );
   }
 });
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // 동일 출처의 /drive-stream/:fileId 요청만 가로챔
   if (url.origin === self.location.origin && url.pathname.startsWith(STREAM_PREFIX)) {
     event.respondWith(handleDriveStream(event.request, url));
   }
@@ -56,12 +99,27 @@ async function handleDriveStream(request, url) {
   }
 
   if (!accessToken) {
+    accessToken = await loadTokenFromCache();
+  }
+
+  if (fileId === '__health') {
+    return new Response(
+      JSON.stringify({ ok: true, hasToken: Boolean(accessToken) }),
+      {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }
+    );
+  }
+
+  if (!accessToken) {
     return new Response('Unauthorized: Google Drive access token is missing in Service Worker.', {
       status: 401,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
     });
   }
 
-  const targetUrl = `${DRIVE_API_BASE}/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`;
+  const targetUrl = `${DRIVE_API_BASE}/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true&acknowledgeAbuse=true`;
   const headers = new Headers();
   headers.set('Authorization', `Bearer ${accessToken}`);
 
@@ -76,6 +134,7 @@ async function handleDriveStream(request, url) {
       headers,
       mode: 'cors',
       credentials: 'omit',
+      redirect: 'follow',
       cache: 'no-store',
     });
 
@@ -108,6 +167,9 @@ async function handleDriveStream(request, url) {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Drive stream proxy error';
-    return new Response(`Stream proxy failed: ${message}`, { status: 502 });
+    return new Response(`Stream proxy failed: ${message}`, {
+      status: 502,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    });
   }
 }

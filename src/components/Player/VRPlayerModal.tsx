@@ -8,10 +8,25 @@ import { ThreeCanvas } from './ThreeCanvas';
 interface VRPlayerModalProps {
   file: DriveFile;
   isSwReady: boolean;
+  accessToken: string | null;
+  syncToken: (token: string | null) => Promise<boolean>;
   onClose: () => void;
 }
 
-export function VRPlayerModal({ file, isSwReady, onClose }: VRPlayerModalProps) {
+const MEDIA_ERROR_MESSAGES: Record<number, string> = {
+  1: '영상 로드가 중단되었습니다.',
+  2: '네트워크 오류로 영상 스트림을 받지 못했습니다.',
+  3: '브라우저에서 이 영상 코덱/형식을 디코딩할 수 없습니다.',
+  4: '지원하지 않는 영상 형식이거나 스트림 응답이 올바르지 않습니다.',
+};
+
+export function VRPlayerModal({
+  file,
+  isSwReady,
+  accessToken,
+  syncToken,
+  onClose,
+}: VRPlayerModalProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const vrTriggerRef = useRef<(() => Promise<void>) | null>(null);
   const hideTimerRef = useRef<number | null>(null);
@@ -20,6 +35,7 @@ export function VRPlayerModal({ file, isSwReady, onClose }: VRPlayerModalProps) 
   const [format, setFormat] = useState<VideoFormatType>(file.detectedFormat);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isBuffering, setIsBuffering] = useState(true);
+  const [isStreamVerified, setIsStreamVerified] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [bufferedPercent, setBufferedPercent] = useState(0);
@@ -34,6 +50,75 @@ export function VRPlayerModal({ file, isSwReady, onClose }: VRPlayerModalProps) 
   const [reloadNonce, setReloadNonce] = useState(0);
 
   const streamUrl = `/drive-stream/${encodeURIComponent(file.id)}?v=${reloadNonce}`;
+
+  useEffect(() => {
+    if (!isSwReady) return;
+    let cancelled = false;
+
+    const verifyStream = async () => {
+      setIsStreamVerified(false);
+      setIsBuffering(true);
+      setStreamError(null);
+
+      try {
+        await syncToken(accessToken);
+
+        const healthRes = await fetch('/drive-stream/__health', { cache: 'no-store' });
+        const healthType = healthRes.headers.get('content-type') || '';
+        if (!healthType.includes('application/json')) {
+          throw new Error(
+            '스트리밍 프록시(Service Worker)가 아직 활성화되지 않았습니다. 페이지를 한 번 새로고침(F5)한 뒤 다시 시도해 주세요.'
+          );
+        }
+
+        const probeRes = await fetch(`/drive-stream/${encodeURIComponent(file.id)}`, {
+          method: 'GET',
+          headers: { Range: 'bytes=0-1' },
+          cache: 'no-store',
+        });
+
+        if (!probeRes.ok && probeRes.status !== 206) {
+          const detail = await probeRes.text().catch(() => '');
+          if (probeRes.status === 401) {
+            throw new Error('Google Drive 인증 토큰이 만료되었습니다. 창을 닫고 다시 로그인해 주세요.');
+          }
+          if (probeRes.status === 403) {
+            throw new Error(
+              `Google Drive 접근이 거부되었습니다 (HTTP 403). 파일 공유/다운로드 권한을 확인해 주세요.${detail ? ` (${detail.slice(0, 120)})` : ''}`
+            );
+          }
+          throw new Error(
+            `스트림 연결 실패 (HTTP ${probeRes.status})${detail ? `: ${detail.slice(0, 140)}` : ''}`
+          );
+        }
+
+        const contentType = probeRes.headers.get('content-type') || '';
+        if (contentType.includes('text/html')) {
+          throw new Error(
+            '영상 대신 웹 페이지가 반환되었습니다. 페이지를 새로고침한 뒤 다시 재생해 주세요.'
+          );
+        }
+
+        if (!cancelled) {
+          setIsStreamVerified(true);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setIsBuffering(false);
+          setStreamError(
+            err instanceof Error
+              ? err.message
+              : '영상 스트리밍을 불러오는 중 오류가 발생했습니다.'
+          );
+        }
+      }
+    };
+
+    void verifyStream();
+    return () => {
+      cancelled = true;
+    };
+  }, [isSwReady, accessToken, syncToken, file.id, reloadNonce]);
 
   const resetHideTimer = useCallback(() => {
     setControlsVisible(true);
@@ -54,7 +139,6 @@ export function VRPlayerModal({ file, isSwReady, onClose }: VRPlayerModalProps) 
     };
   }, [resetHideTimer]);
 
-  // ESC 키 및 스페이스바 단축키
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -177,8 +261,7 @@ export function VRPlayerModal({ file, isSwReady, onClose }: VRPlayerModalProps) 
       onMouseMove={resetHideTimer}
       onTouchStart={resetHideTimer}
     >
-      {/* 숨겨진 HTML5 Video 스트림 소스 */}
-      {isSwReady && (
+      {isSwReady && isStreamVerified && (
         <video
           ref={setVideoRefCallback}
           src={streamUrl}
@@ -206,16 +289,18 @@ export function VRPlayerModal({ file, isSwReady, onClose }: VRPlayerModalProps) 
             updateBuffered();
           }}
           onProgress={updateBuffered}
-          onError={() => {
+          onError={(e) => {
             setIsBuffering(false);
+            const mediaErr = e.currentTarget.error;
+            const codeMsg = mediaErr ? MEDIA_ERROR_MESSAGES[mediaErr.code] : undefined;
+            const detail = mediaErr?.message ? ` (${mediaErr.message})` : '';
             setStreamError(
-              '영상 스트리밍을 불러오는 중 오류가 발생했습니다. 네트워크 상태나 로그인 토큰 만료 여부를 확인해 주세요.'
+              `${codeMsg || '영상 스트리밍을 불러오는 중 오류가 발생했습니다.'}${detail}`
             );
           }}
         />
       )}
 
-      {/* 상단 HUD 헤더 */}
       <div
         className={`pointer-events-none absolute inset-x-0 top-0 z-20 transition-opacity duration-300 ${
           controlsVisible ? 'opacity-100' : 'opacity-0'
@@ -251,7 +336,6 @@ export function VRPlayerModal({ file, isSwReady, onClose }: VRPlayerModalProps) 
         </div>
       </div>
 
-      {/* Three.js 3D/VR 캔버스 */}
       <div className="relative flex-1 overflow-hidden">
         <ThreeCanvas
           videoElement={videoElement}
@@ -263,7 +347,6 @@ export function VRPlayerModal({ file, isSwReady, onClose }: VRPlayerModalProps) 
           vrTriggerRef={vrTriggerRef}
         />
 
-        {/* 버퍼링 인디케이터 */}
         {isBuffering && !streamError && (
           <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/30">
             <Loader2 className="h-10 w-10 animate-spin text-indigo-400" />
@@ -273,7 +356,6 @@ export function VRPlayerModal({ file, isSwReady, onClose }: VRPlayerModalProps) 
           </div>
         )}
 
-        {/* 스트림 오류 안내 */}
         {streamError && (
           <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/80 p-6">
             <div className="max-w-md rounded-2xl border border-rose-500/30 bg-slate-900/95 p-6 text-center shadow-2xl">
@@ -306,7 +388,6 @@ export function VRPlayerModal({ file, isSwReady, onClose }: VRPlayerModalProps) 
         )}
       </div>
 
-      {/* 하단 컨트롤 HUD */}
       <PlayerControls
         visible={controlsVisible}
         isPlaying={isPlaying}

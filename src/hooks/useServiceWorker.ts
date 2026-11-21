@@ -13,12 +13,33 @@ function postMessageWithAck(
 ): Promise<boolean> {
   return new Promise((resolve) => {
     const channel = new MessageChannel();
-    const timer = window.setTimeout(() => resolve(true), 800);
+    const timer = window.setTimeout(() => resolve(true), 1000);
     channel.port1.onmessage = (event) => {
       window.clearTimeout(timer);
       resolve(Boolean(event.data?.ok));
     };
     worker.postMessage(payload, [channel.port2]);
+  });
+}
+
+async function waitForController(timeoutMs = 3000): Promise<ServiceWorker | null> {
+  if (navigator.serviceWorker.controller) {
+    return navigator.serviceWorker.controller;
+  }
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => {
+      navigator.serviceWorker.removeEventListener('controllerchange', onChange);
+      resolve(navigator.serviceWorker.controller);
+    }, timeoutMs);
+
+    const onChange = () => {
+      if (navigator.serviceWorker.controller) {
+        window.clearTimeout(timer);
+        navigator.serviceWorker.removeEventListener('controllerchange', onChange);
+        resolve(navigator.serviceWorker.controller);
+      }
+    };
+    navigator.serviceWorker.addEventListener('controllerchange', onChange);
   });
 }
 
@@ -32,7 +53,8 @@ export function useServiceWorker(accessToken: string | null): UseServiceWorkerRe
 
     try {
       const registration = await navigator.serviceWorker.ready;
-      const targetWorker = navigator.serviceWorker.controller || registration.active;
+      const controller = await waitForController(2500);
+      const targetWorker = controller || registration.active;
       if (!targetWorker) {
         setIsTokenSynced(false);
         return false;
@@ -61,13 +83,18 @@ export function useServiceWorker(accessToken: string | null): UseServiceWorkerRe
 
     const registerSw = async () => {
       try {
-        const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+        const registration = await navigator.serviceWorker.register('/sw.js', {
+          scope: '/',
+          updateViaCache: 'none',
+        });
+        await registration.update().catch(() => undefined);
         await navigator.serviceWorker.ready;
+        await waitForController(2500);
 
         if (!cancelled) {
           setIsReady(true);
           setSwError(null);
-          if (registration.active && accessToken) {
+          if (accessToken) {
             await syncToken(accessToken);
           }
         }
@@ -82,7 +109,7 @@ export function useServiceWorker(accessToken: string | null): UseServiceWorkerRe
       }
     };
 
-    registerSw();
+    void registerSw();
 
     const handleControllerChange = () => {
       if (accessToken) {
