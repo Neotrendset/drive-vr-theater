@@ -318,7 +318,6 @@ export function VRPlayerModal({
         <video
           ref={setVideoRefCallback}
           src={streamUrl}
-          crossOrigin="anonymous"
           playsInline
           autoPlay
           preload="auto"
