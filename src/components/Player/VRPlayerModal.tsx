@@ -48,11 +48,27 @@ export function VRPlayerModal({
   const [isInVR, setIsInVR] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [streamDebugInfo, setStreamDebugInfo] = useState<string>('');
+  const [useDirectFallback, setUseDirectFallback] = useState<boolean>(() => {
+    if (typeof navigator === 'undefined') return false;
+    const ua = navigator.userAgent;
+    return /Safari/i.test(ua) && !/Chrome|Chromium|Edg|Android/i.test(ua);
+  });
   const [reloadNonce, setReloadNonce] = useState(0);
 
-  const streamUrl = `/drive-stream/${encodeURIComponent(file.id)}?v=${reloadNonce}&mime=${encodeURIComponent(file.mimeType || 'video/mp4')}&size=${encodeURIComponent(file.size || '')}`;
+  const swStreamUrl = `/drive-stream/${encodeURIComponent(file.id)}?v=${reloadNonce}&mime=${encodeURIComponent(file.mimeType || 'video/mp4')}&size=${encodeURIComponent(file.size || '')}`;
+  const directStreamUrl = accessToken
+    ? `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.id)}?alt=media&supportsAllDrives=true&acknowledgeAbuse=true&access_token=${encodeURIComponent(accessToken)}`
+    : swStreamUrl;
+  const streamUrl = useDirectFallback ? directStreamUrl : swStreamUrl;
 
   useEffect(() => {
+    if (useDirectFallback) {
+      setIsStreamVerified(true);
+      setIsBuffering(true);
+      setStreamError(null);
+      setStreamDebugInfo(`파일 형식: ${file.mimeType} | 모드: Direct Drive Stream`);
+      return;
+    }
     if (!isSwReady) return;
     let cancelled = false;
 
@@ -126,7 +142,7 @@ export function VRPlayerModal({
     return () => {
       cancelled = true;
     };
-  }, [isSwReady, accessToken, syncToken, file.id, reloadNonce]);
+  }, [isSwReady, useDirectFallback, accessToken, syncToken, file.id, file.mimeType, file.size, reloadNonce]);
 
   const resetHideTimer = useCallback(() => {
     setControlsVisible(true);
@@ -269,7 +285,7 @@ export function VRPlayerModal({
       onMouseMove={resetHideTimer}
       onTouchStart={resetHideTimer}
     >
-      {isSwReady && isStreamVerified && (
+      {(useDirectFallback || isSwReady) && isStreamVerified && (
         <video
           ref={setVideoRefCallback}
           src={streamUrl}
@@ -298,11 +314,27 @@ export function VRPlayerModal({
           }}
           onProgress={updateBuffered}
           onError={(e) => {
+            if (!useDirectFallback && accessToken) {
+              setUseDirectFallback(true);
+              setIsBuffering(true);
+              setStreamError(null);
+              return;
+            }
             setIsBuffering(false);
-            const mediaErr = e.currentTarget.error;
+            const vid = e.currentTarget;
+            const mediaErr = vid.error;
             const codeMsg = mediaErr ? MEDIA_ERROR_MESSAGES[mediaErr.code] : undefined;
             const detail = mediaErr?.message ? ` (${mediaErr.message})` : '';
-            const debugSuffix = streamDebugInfo ? ` [${streamDebugInfo}]` : '';
+            const h264Support = vid.canPlayType('video/mp4; codecs="avc1.42E01E"') || 'no';
+            const hevcSupport =
+              vid.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"') ||
+              vid.canPlayType('video/mp4; codecs="hev1.1.6.L93.B0"') ||
+              'no';
+            const codecHint =
+              h264Support === 'no' || hevcSupport === 'no'
+                ? ` | 코덱 지원(H.264: ${h264Support}, HEVC: ${hevcSupport}) — 현재 브라우저에서 미지원 코덱일 경우 Safari/Chrome에서 열어보세요.`
+                : '';
+            const debugSuffix = streamDebugInfo ? ` [${streamDebugInfo}${codecHint}]` : '';
             setStreamError(
               `${codeMsg || '영상 스트리밍을 불러오는 중 오류가 발생했습니다.'}${detail}${debugSuffix}`
             );

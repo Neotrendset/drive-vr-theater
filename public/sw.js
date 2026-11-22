@@ -187,6 +187,13 @@ async function handleDriveStream(request, url) {
       }
     }
 
+    if (finalStatus === 200 && !responseHeaders.has('Content-Length')) {
+      const totalSize = Number(url.searchParams.get('size') || '0');
+      if (totalSize > 0) {
+        responseHeaders.set('Content-Length', String(totalSize));
+      }
+    }
+
     const fallbackMime = url.searchParams.get('mime');
     const currentType = responseHeaders.get('Content-Type') || '';
     if (fallbackMime && (!currentType || currentType.includes('octet-stream'))) {
