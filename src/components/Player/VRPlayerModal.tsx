@@ -56,17 +56,17 @@ export function VRPlayerModal({
   const [reloadNonce, setReloadNonce] = useState(0);
 
   const swStreamUrl = `/drive-stream/${encodeURIComponent(file.id)}?v=${reloadNonce}&mime=${encodeURIComponent(file.mimeType || 'video/mp4')}&size=${encodeURIComponent(file.size || '')}`;
-  const directStreamUrl = accessToken
-    ? `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.id)}?alt=media&supportsAllDrives=true&acknowledgeAbuse=true&access_token=${encodeURIComponent(accessToken)}`
+  const cfProxyStreamUrl = accessToken
+    ? `/drive-stream/${encodeURIComponent(file.id)}?directProxy=1&token=${encodeURIComponent(accessToken)}&mime=${encodeURIComponent(file.mimeType || 'video/mp4')}&size=${encodeURIComponent(file.size || '')}`
     : swStreamUrl;
-  const streamUrl = useDirectFallback ? directStreamUrl : swStreamUrl;
+  const streamUrl = useDirectFallback ? cfProxyStreamUrl : swStreamUrl;
 
   useEffect(() => {
     if (useDirectFallback) {
       setIsStreamVerified(true);
       setIsBuffering(true);
       setStreamError(null);
-      setStreamDebugInfo(`파일 형식: ${file.mimeType} | 모드: Direct Drive Stream`);
+      setStreamDebugInfo(`파일 형식: ${file.mimeType} | 모드: Edge Proxy Stream`);
       return;
     }
     if (!isSwReady) return;

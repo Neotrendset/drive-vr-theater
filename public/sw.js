@@ -81,6 +81,9 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
   if (url.origin === self.location.origin && url.pathname.startsWith(STREAM_PREFIX)) {
+    if (url.searchParams.get('directProxy') === '1') {
+      return;
+    }
     event.respondWith(handleDriveStream(event.request, url));
   }
 });
