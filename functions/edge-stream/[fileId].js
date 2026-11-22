@@ -67,6 +67,19 @@ export async function onRequest(context) {
       responseHeaders.set('Accept-Ranges', 'bytes');
     }
 
+    // Safari AVFoundation은 Content-Length가 없으면 MP4 재생을 거부할 수 있음
+    if (!responseHeaders.has('Content-Length')) {
+      const cr = responseHeaders.get('Content-Range');
+      const crMatch = cr ? cr.match(/bytes\s+(\d+)-(\d+)\/(\d+|\*)/i) : null;
+      if (crMatch) {
+        const len = Number(crMatch[2]) - Number(crMatch[1]) + 1;
+        if (len > 0) responseHeaders.set('Content-Length', String(len));
+      } else if (upstream.status === 200) {
+        const totalSize = Number(url.searchParams.get('size') || '0');
+        if (totalSize > 0) responseHeaders.set('Content-Length', String(totalSize));
+      }
+    }
+
     const fallbackMime = url.searchParams.get('mime');
     const currentType = responseHeaders.get('Content-Type') || '';
     if (fallbackMime && (!currentType || currentType.includes('octet-stream'))) {
