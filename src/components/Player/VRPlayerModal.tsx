@@ -57,17 +57,46 @@ export function VRPlayerModal({
 
   const swStreamUrl = `/drive-stream/${encodeURIComponent(file.id)}?v=${reloadNonce}&mime=${encodeURIComponent(file.mimeType || 'video/mp4')}&size=${encodeURIComponent(file.size || '')}`;
   const cfProxyStreamUrl = accessToken
-    ? `/drive-stream/${encodeURIComponent(file.id)}?directProxy=1&token=${encodeURIComponent(accessToken)}&mime=${encodeURIComponent(file.mimeType || 'video/mp4')}&size=${encodeURIComponent(file.size || '')}`
+    ? `/edge-stream/${encodeURIComponent(file.id)}?token=${encodeURIComponent(accessToken)}&mime=${encodeURIComponent(file.mimeType || 'video/mp4')}&size=${encodeURIComponent(file.size || '')}`
     : swStreamUrl;
   const streamUrl = useDirectFallback ? cfProxyStreamUrl : swStreamUrl;
 
   useEffect(() => {
     if (useDirectFallback) {
-      setIsStreamVerified(true);
-      setIsBuffering(true);
-      setStreamError(null);
-      setStreamDebugInfo(`파일 형식: ${file.mimeType} | 모드: Edge Proxy Stream`);
-      return;
+      let cancelled = false;
+      const verifyEdge = async () => {
+        setIsStreamVerified(false);
+        setIsBuffering(true);
+        setStreamError(null);
+        try {
+          const probeRes = await fetch(cfProxyStreamUrl, {
+            method: 'GET',
+            headers: { Range: 'bytes=0-1' },
+            cache: 'no-store',
+          });
+          if (!probeRes.ok && probeRes.status !== 206) {
+            const detail = await probeRes.text().catch(() => '');
+            throw new Error(`Edge 스트림 연결 실패 (HTTP ${probeRes.status})${detail ? `: ${detail.slice(0, 120)}` : ''}`);
+          }
+          const ct = probeRes.headers.get('content-type') || '';
+          const cr = probeRes.headers.get('content-range') || '';
+          if (!cancelled) {
+            setStreamDebugInfo(
+              `파일 형식: ${file.mimeType} | 모드: Edge Proxy Stream (HTTP ${probeRes.status}, ${ct || 'no-type'}, ${cr || 'no-range'})`
+            );
+            setIsStreamVerified(true);
+          }
+        } catch (err) {
+          if (!cancelled) {
+            setIsBuffering(false);
+            setStreamError(err instanceof Error ? err.message : 'Edge 스트림 연결 실패');
+          }
+        }
+      };
+      void verifyEdge();
+      return () => {
+        cancelled = true;
+      };
     }
     if (!isSwReady) return;
     let cancelled = false;
